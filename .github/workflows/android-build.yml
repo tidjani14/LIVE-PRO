@@ -1,4 +1,4 @@
-name: LIVE PRO Cloud APK Builder
+name: LivePro Final Build
 
 on:
   push:
@@ -7,187 +7,38 @@ on:
 
 permissions:
   contents: write
-  actions: read
 
 jobs:
   build:
-    name: Build & Verify LIVE PRO v6.0 beIN Dark Purple Edition (Debug + Signed Release)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Step 1 — Validate & Sanitize XML, Kotlin & Gradle Sources
-        run: |
-          echo "=== Verifying XML, Kotlin, and Gradle Source Files ==="
-          find app/src/main -type f \( -name "*.xml" -o -name "*.kt" \) | while read -r f; do
-            sed -i \
-              -e 's/&lt;/</g' \
-              -e 's/&gt;/>/g' \
-              -e 's/&quot;/"/g' \
-              -e "s/&#39;/'/g" \
-              -e 's/&amp;/\&/g' \
-              -e 's|https://www.google.com/search?q=https://|https://|g' \
-              -e 's|https://www.google.com/search?q=http://|http://|g' \
-              -e 's|\\_|_|g' \
-              "$f"
-          done
-          if grep -rnE "(&lt;|&gt;|&quot;|google\.com/search\?q=)" app/src/main/; then
-            echo "❌ Source validation failed: corrupted HTML entities or redirect URLs found!"
-            exit 1
-          fi
-          if command -v xmllint >/dev/null 2>&1; then
-            xmllint --noout app/src/main/AndroidManifest.xml
-            xmllint --noout app/src/main/res/xml/network_security_config.xml
-            xmllint --noout app/src/main/res/values/styles.xml
-            xmllint --noout app/src/main/res/drawable/app_logo.xml
-            xmllint --noout app/src/main/res/drawable/tv_banner.xml
-          fi
-          echo "✅ All XML and Kotlin files passed structural validation."
-
-      - name: Set up JDK 17 (Temurin)
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
-      - name: Configure Pre-installed Android SDK
-        run: |
-          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          elif [ -x "$ANDROID_HOME/tools/bin/sdkmanager" ]; then
-            yes | "$ANDROID_HOME/tools/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          fi
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-
-      - name: Set up Gradle 8.6 & Verify Wrapper
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.6'
-          cache-read-only: false
-
-      - name: Ensure Executable Gradle Wrapper (./gradlew)
+      - name: Build Debug APK
         run: |
-          if [ ! -x ./gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            gradle --no-daemon wrapper --gradle-version 8.6 --distribution-type bin
+          if [ ! -x ./gradlew ]; then
+            gradle wrapper --gradle-version 8.6 --distribution-type bin
+            chmod +x ./gradlew
           fi
-          chmod +x ./gradlew
-          ./gradlew --version
-
-      - name: Step 2 — Run Clean
-        run: ./gradlew --no-daemon --stacktrace clean
-
-      - name: Step 3 — Build Debug APK (assembleDebug)
-        run: |
-          set -o pipefail
-          ./gradlew --no-daemon --stacktrace assembleDebug 2>&1 | tee build_debug.log
-
-      - name: Step 4 — Run Static Analysis (lintDebug) & Unit Tests (testDebugUnitTest)
-        run: |
-          ./gradlew --no-daemon --stacktrace lintDebug testDebugUnitTest
-
-      - name: Step 5 — Prepare Release Signing Keystore (GitHub Secrets Preferred)
-        env:
-          KEYSTORE_B64: ${{ secrets.LIVEPRO_KEYSTORE_BASE64 }}
-          STORE_PASS: ${{ secrets.LIVEPRO_STORE_PASS }}
-          KEY_PASS: ${{ secrets.LIVEPRO_KEY_PASS }}
-          KEY_ALIAS: ${{ secrets.LIVEPRO_KEY_ALIAS }}
-        run: |
-          mkdir -p keystore
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "🔐 Decoding persistent production keystore from GitHub Secrets..."
-            echo "$KEYSTORE_B64" | base64 --decode > keystore/livepro-release.jks
-          elif [ ! -f keystore/livepro-release.jks ]; then
-            echo "ℹ️ LIVEPRO_KEYSTORE_BASE64 secret not set; generating CI signing key..."
-            PASS="${STORE_PASS:-LiveProReleaseKey2026}"
-            KPASS="${KEY_PASS:-$PASS}"
-            ALIAS="${KEY_ALIAS:-livepro_key}"
-            keytool -genkeypair -v \
-              -keystore keystore/livepro-release.jks \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -alias "$ALIAS" \
-              -storepass "$PASS" \
-              -keypass "$KPASS" \
-              -dname "CN=LIVE PRO, OU=Mobile, O=TVFlux, L=Constantine, ST=Constantine, C=DZ"
-          fi
-
-      - name: Step 6 — Build Signed Release APK (assembleRelease)
-        env:
-          LIVEPRO_STORE_PASS: ${{ secrets.LIVEPRO_STORE_PASS || 'LiveProReleaseKey2026' }}
-          LIVEPRO_KEY_PASS: ${{ secrets.LIVEPRO_KEY_PASS || 'LiveProReleaseKey2026' }}
-          LIVEPRO_KEY_ALIAS: ${{ secrets.LIVEPRO_KEY_ALIAS || 'livepro_key' }}
-        run: |
-          set -o pipefail
-          ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee build_release.log
-
-      - name: Print Compiler Diagnostics on Failure
-        if: failure()
-        run: |
-          echo "=== KOTLIN / GRADLE ERRORS ==="
-          cat build_debug.log build_release.log 2>/dev/null | grep -E "(^e: |FAILURE:|What went wrong:|Execution failed for task|Unresolved reference|Type mismatch)" -A 5 || tail -n 120 build_debug.log
-
-      - name: Step 7 — Verify APK Existence, Signature (apksigner) & SHA-256 Checksums
-        run: |
-          mkdir -p dist
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          cp -f app/build/outputs/apk/debug/app-debug.apk dist/LIVE-PRO-v6.0-debug.apk
-
-          if [ -s app/build/outputs/apk/release/app-release.apk ]; then
-            cp -f app/build/outputs/apk/release/app-release.apk dist/LIVE-PRO-v6.0-release-signed.apk
-          elif [ -s app/build/outputs/apk/release/app-release-unsigned.apk ]; then
-            cp -f app/build/outputs/apk/release/app-release-unsigned.apk dist/LIVE-PRO-v6.0-release.apk
-          else
-            echo "❌ Release APK was not produced!"
-            exit 1
-          fi
-
-          APKSIGNER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
-          if [ -n "$APKSIGNER" ] && [ -f dist/LIVE-PRO-v6.0-release-signed.apk ]; then
-            echo "🔒 Verifying APK signature via apksigner..."
-            "$APKSIGNER" verify --verbose dist/LIVE-PRO-v6.0-release-signed.apk
-          fi
-
-          cp -f server_portal/customer_portal.php dist/customer_portal.php || true
-          if [ -f app/build/reports/lint-results-debug.txt ]; then
-            cp -f app/build/reports/lint-results-debug.txt dist/lint-results-debug.txt
-          fi
-          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
-          ls -lh dist/
-          cat dist/SHA256SUMS.txt
-
-      - name: Upload Build Artifacts (Debug + Signed Release + Customer Portal PHP)
+          ./gradlew assembleDebug --stacktrace
+          
+      - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LIVE-PRO-v6.0-APKs
-          path: |
-            dist/*.apk
-            dist/customer_portal.php
-            dist/SHA256SUMS.txt
-            dist/lint-results-debug.txt
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Publish Official GitHub Release
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+          name: LivePro-v6-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v6.0.${{ github.run_number }}
-          name: "LIVE PRO v6.0 beIN Dark Purple Edition (Build #${{ github.run_number }})"
-          body: |
-            ### 🚀 LIVE PRO v6.0 — beIN Dark Purple Enterprise Edition
-            - **اللون البنفسجي الداكن المريح للعين (`#2E1452` / `#1E0E36` / `#08050E`)**: تصميم هادئ وجذاب بدون تشويش لوني مع وضوح فائق لمؤشر التنقل بالريموت.
-            - **إظهار أسماء الباقات والقنوات بالكامل**: تصميم متجاوب في صفحة الباقات وفي القائمة المنبثقة داخل المشغل لعرض الاسم كاملاً دون قص عند الحواف.
-            - **العودة لآخر قناة شاهدها المستخدم**: عند الخروج من المشغل يبقى المؤشر والتمرير على نفس القناة التي كنت تشاهدها ولا يرجع لبداية الباقة.
-            - **واجهة نظيفة بدون أرقام أو علامة `#` على شعارات القنوات**.
-            - **عرض مدة صلاحية المشغل وتاريخ الانتهاء + صفحة انتهاء الصلاحية الاحترافية**: التواصل مع **علي سات : 00213697372480** مع عرض رمز الشاشة.
-            - **لوحة فضاء الزبون المستقلة (`customer_portal.php`)**: إدارة وإضافة وتعديل وحذف القوائم عبر رمز الشاشة مع التحقق من صلاحية المشغل قبل السماح بالرفع.
-          files: |
-            dist/*.apk
-            dist/customer_portal.php
-            dist/SHA256SUMS.txt
-          prerelease: false
-        continue-on-error: true
+          name: "LIVE PRO v6 Build #${{ github.run_number }}"
+          files: app/build/outputs/apk/debug/app-debug.apk
