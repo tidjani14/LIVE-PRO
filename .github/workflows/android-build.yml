@@ -1,9 +1,12 @@
-name: LivePro Build
+name: LivePro Final Build
 
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -19,12 +22,23 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.6'
-      - name: Ensure Gradle Wrapper
+      - name: Build Debug APK
         run: |
           if [ ! -x ./gradlew ]; then
             gradle wrapper --gradle-version 8.6 --distribution-type bin
             chmod +x ./gradlew
           fi
-      - name: Build Debug APK
-        run: |
           ./gradlew assembleDebug --stacktrace
+          
+      - name: Upload APK as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LivePro-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v5.1.${{ github.run_number }}
+          name: "LIVE PRO v5.1 Build #${{ github.run_number }}"
+          files: app/build/outputs/apk/debug/app-debug.apk
