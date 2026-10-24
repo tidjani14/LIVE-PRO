@@ -1,0 +1,8 @@
+-keepattributes *Annotation*,InnerClasses,Signature,EnclosingMethod
+-keep class com.tvflux.pro.** { *; }
+-keep class com.wireguard.** { *; }
+-dontwarn com.wireguard.**
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn androidx.media3.**
+-keep class androidx.media3.** { *; }
