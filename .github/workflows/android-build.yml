@@ -19,16 +19,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.6'
-      - name: Compile and Print Error
+      - name: Ensure Gradle Wrapper
         run: |
-          if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version 8.6 --distribution-type bin; chmod +x ./gradlew; fi
-          set +e
-          ./gradlew assembleDebug > build_full.log 2>&1
-          EXIT_CODE=$?
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "❌ BUILD FAILED ❌"
-            grep -E "^e: |error:|FAILURE: Build failed" build_full.log || tail -n 100 build_full.log
-          else
-            echo "✅ BUILD SUCCESSFUL"
+          if [ ! -x ./gradlew ]; then
+            gradle wrapper --gradle-version 8.6 --distribution-type bin
+            chmod +x ./gradlew
           fi
-          exit $EXIT_CODE
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug --stacktrace
